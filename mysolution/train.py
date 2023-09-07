@@ -1,164 +1,146 @@
-import argparse
-
-import torch
-from torch import nn
-from torch import optim
-from torch.autograd import Variable
-
-from torchvision import datasets, transforms, models
-from torchvision.datasets import ImageFolder
-
-import torch.nn.functional as F
-
-from PIL import Image
-from collections import OrderedDict
-
-import time
+import argparse 
+from train_helper import load_data 
+from train_helper import MyModel 
+import os 
 import numpy as np
-import matplotlib.pyplot as plt
-
-from util import save_checkpoint, load_checkpoint
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Training")
-    parser.add_argument('--data_dir', action='store')
-    parser.add_argument('--arch', dest='arch', default='vgg16', choices=['vgg16', 'densenet121'])
-    parser.add_argument('--learning_rate', dest='learning_rate', default='0.001')
-    parser.add_argument('--hidden_units', dest='hidden_units', default='512')
-    parser.add_argument('--epochs', dest='epochs', default='3')
-    parser.add_argument('--gpu', action='store', default='gpu')
-    parser.add_argument('--save_dir', dest="save_dir", action="store", default="checkpoint.pth")
-    return parser.parse_args()
-
-def train(model, criterion, optimizer, dataloaders, epochs, gpu):         # dataloaders[0] = train, dataloaders[1] = validation, dataloaders[2] = test
-    steps = 0
-    print_every = 10
-    for e in range(epochs):
-        running_loss = 0        
-        for ii, (inputs, labels) in enumerate(dataloaders[0]):
-            steps += 1 
-            
-            if gpu == 'gpu':
-                model.cuda()
-                inputs, labels = inputs.to('cuda'), labels.to('cuda')     # Move input and label tensors to the default device(use cuda)
-            else:
-                model.cpu()                                               # Use cpu other than 'gpu'
-            
-             
-            optimizer.zero_grad()     
-            
-             
-            outputs = model.forward(inputs)
-             
-            loss = criterion(outputs, labels)
-             
-            loss.backward()
-             
-            optimizer.step()
-            
-             
-            running_loss += loss.item()
-
-            if steps % print_every == 0:
-                model.eval()
-                valloss = 0
-                accuracy= 0
-
-                for ii, (inputs2,labels2) in enumerate(dataloaders[1]):
-                        optimizer.zero_grad()
-                        
-                        if gpu == 'gpu':
-                            inputs2, labels2 = inputs2.to('cuda') , labels2.to('cuda') # Use cuda
-                            model.to('cuda:0') 
-                        else:
-                            # Use the inputs
-                            pass 
-                            
-                        with torch.no_grad():    
-                            outputs = model.forward(inputs2)
-                            valloss = criterion(outputs,labels2)
-                            ps = torch.exp(outputs).data
-                            equality = (labels2.data == ps.max(1)[1])
-                            accuracy += equality.type_as(torch.FloatTensor()).mean()
-
-                valloss = valloss / len(dataloaders[1])
-                accuracy = accuracy /len(dataloaders[1])
-
-                print("Epoch: {}/{}... ".format(e+1, epochs),
-                      "Train Loss: {:.4f}".format(running_loss/print_every),
-                      "Validation Loss: {:.4f}".format(valloss),
-                      "Test accuracy: {:.4f}".format(accuracy),
-                     )
-
-                running_loss = 0
-            
-def main():
-    args = parse_args()
+import sys
     
-    data_dir = 'flowers'
-    train_dir = data_dir + '/train'
-    val_dir = data_dir + '/valid'
-    test_dir = data_dir + '/test'
-    
-    train_transforms = transforms.Compose([transforms.RandomRotation(30), transforms.RandomResizedCrop(224),
-                                              transforms.RandomHorizontalFlip(), transforms.ToTensor(),
-                                              transforms.Normalize([0.485, 0.456, 0.406], 
-                                                                   [0.229, 0.224, 0.225])])
-    
-    validataion_transforms = transforms.Compose([transforms.Resize(256), transforms.CenterCrop(224), transforms.ToTensor(),
-                                                 transforms.Normalize([0.485, 0.456, 0.406], 
-                                                                      [0.229, 0.224, 0.225])]) 
+import torch 
+from torch import nn 
+from torch import optim
+import torch.nn.functional as F 
 
-    test_transforms = transforms.Compose([transforms.Resize(256), transforms.CenterCrop(224), transforms.ToTensor(),
-                                             transforms.Normalize([0.485, 0.456, 0.406], 
-                                                                  [0.229, 0.224, 0.225])]) 
 
-    image_datasets = [ImageFolder(train_dir, transform=train_transforms),
-                      ImageFolder(val_dir, transform=validataion_transforms),
-                      ImageFolder(test_dir, transform=test_transforms)]
+parser = argparse.ArgumentParser(description='Training a deep learning model for classifying flowers')
+
+parser.add_argument('data_directory', action="store")
+parser.add_argument('--save_dir', action="store", dest="save_dir", default="." ) 
+parser.add_argument('--arch', action="store", dest="arch", default="vgg16") 
+parser.add_argument('--learning_rate', action="store",type=float, dest="learning_rate", default=0.001) 
+parser.add_argument('--hidden_units', action="store",type=int, dest="hidden_units", default=1500)
+parser.add_argument('--epochs', action="store",type=int, dest="epochs", default=4)
+parser.add_argument('--gpu', action="store_true", dest="gpu", default=False)
+
+args = parser.parse_args()
+
+
+### Usage of our command line data
+data_directory = args.data_directory
+save_dir = args.save_dir
+arch = args.arch
+learning_rate = args.learning_rate 
+hidden_units = args.hidden_units 
+epochs = args.epochs 
+gpu  = args.gpu
+# learning_rate = float(learning_rate)
+# hidden_units = int(float(hidden_units))
+# epochs = int(float(epochs))
+
+
+if not os.path.exists(save_dir):
+    os.makedirs(save_dir)
+
+# if gpu and  not torch.cuda.is_available() :
+#     print("There is no a gpu device available")
+#     sys.exit()
     
-    dataloaders = [torch.utils.data.DataLoader(image_datasets[0], batch_size=64, shuffle=True),
-                   torch.utils.data.DataLoader(image_datasets[1], batch_size=64, shuffle=True),
-                   torch.utils.data.DataLoader(image_datasets[2], batch_size=64, shuffle=True)]
-   
-    model = getattr(models, args.arch)(pretrained=True)
+trainloader, validloader, testloader, class_to_idx = load_data(data_directory)
+
+model = MyModel(arch, hidden_units)
+
+
+message_cuda = "cuda is available" if torch.cuda.is_available() else "cuda is not available"
+
+print(message_cuda)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+criterion = nn.NLLLoss()
+
+# Only train the classifier parameters 
+optimizer = optim.Adam(model.classifier.parameters(), lr = learning_rate)
+
+# We move our model to cuda, if this is available.
+model.to(device);
+
+
+steps = 0
+running_loss = 0
+print_every = 20
+
+
+for epoch in range(epochs):
+    for inputs, labels in trainloader:
+        steps += 1
+        # Move input and label tensors to the default device
+        inputs, labels = inputs.to(device), labels.to(device)
         
-    for param in model.parameters():
-        param.requires_grad = False
-    
-    if args.arch == "vgg16":
-        classifier = nn.Sequential(OrderedDict([
-                                  ('fc1', nn.Linear(25088, 4096)),
-                                  ('relu', nn.ReLU()),
-                                  ('dropout', nn.Dropout(0.2)),
-                                  ('fc2', nn.Linear(4096, 512)),
-                                  ('relu', nn.ReLU()),
-                                  ('fc3', nn.Linear(512, 102)),
-                                  ('output', nn.LogSoftmax(dim=1))]))
-    elif args.arch == "densenet121":
-        classifier = nn.Sequential(OrderedDict([
-                                  ('fc1', nn.Linear(1024, 500)),
-                                  ('dropout', nn.Dropout(p=0.6)),
-                                  ('relu', nn.ReLU()),
-                                  ('fc2', nn.Linear(500, 102)),
-                                  ('output', nn.LogSoftmax(dim=1))]))
+        optimizer.zero_grad()
+        
+        logps = model.forward(inputs)
+        loss = criterion(logps, labels)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item()
+        
+        if steps % print_every == 0:
+            valid_loss = 0
+            accuracy = 0
+            model.eval()
+            with torch.no_grad():
+                for inputs, labels in validloader:
+                    inputs, labels = inputs.to(device), labels.to(device)
+                    logps = model.forward(inputs)
+                    batch_loss = criterion(logps, labels)
+                    
+                    valid_loss += batch_loss.item()
+                    
+                    # Calculate accuracy
+                    ps = torch.exp(logps)
+                    top_p, top_class = ps.topk(1, dim=1)
+                    equals = top_class == labels.view(*top_class.shape)
+                    accuracy += torch.mean(equals.type(torch.FloatTensor)).item()        
+            print(f"Epoch {epoch+1}/{epochs}.. "
+                  f"Train loss: {running_loss/print_every:.3f}.. "
+                  f"Valid loss: {valid_loss/len(validloader):.3f}.. "
+                  f"Valid accuracy: {accuracy/len(validloader):.3f}")
+            running_loss = 0
+            model.train()                    
+
+ # TODO: Do validation on the test set           
+test_loss = 0 
+accuracy = 0 
+
+with torch.no_grad():
+    for inputs, labels in testloader:
+        inputs, labels = inputs.to(device), labels.to(device)
+        logps = model.forward(inputs)
+        batch_loss = criterion(logps, labels)
+                    
+        test_loss += batch_loss.item()
+                    
+        # Calculate accuracy
+        ps = torch.exp(logps)
+        top_p, top_class = ps.topk(1, dim=1)
+        equals = top_class == labels.view(*top_class.shape)
+        accuracy += torch.mean(equals.type(torch.FloatTensor)).item()
 
         
-    model.classifier = classifier
-     
-    criterion = nn.NLLLoss()
-     
-    optimizer = optim.Adam(model.classifier.parameters(), lr=float(args.learning_rate))
-    epochs = int(args.epochs)
-    class_index = image_datasets[0].class_to_idx
-     
-    gpu = args.gpu 
-    train(model, criterion, optimizer, dataloaders, epochs, gpu)
-    model.class_to_idx = class_index
-     
-    path = args.save_dir  
-    save_checkpoint(path, model, optimizer, args, classifier)
+print(f"Test loss: {test_loss/len(testloader):.3f}.. "
+      f"Test accuracy: {accuracy/len(testloader):.3f}")                              
 
+# TODO: Save the checkpoint 
 
-if __name__ == "__main__":
-    main()
+checkpoint = { 'arch' : arch ,
+               'state_dict' : model.state_dict(),
+               'class_to_idx' : class_to_idx, 
+               'hidden_units': hidden_units               
+             }
+
+if save_dir.endswith('/'):
+    torch.save(checkpoint, save_dir + 'checkpoint.pth')
+else:
+    torch.save(checkpoint, save_dir + '/' + 'checkpoint.pth')
+    
+print("Checkpoint saved")
